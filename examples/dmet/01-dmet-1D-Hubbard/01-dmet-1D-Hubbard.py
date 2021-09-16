@@ -39,8 +39,7 @@ def test_hub1d_nib():
     Lat.setHam(Ham, use_hcore_as_emb_ham=use_hcore_as_emb_ham)
     vcor = dmet.PMInitGuess(ImpSize, U, Filling)
 
-    FCI = dmet.impurity_solver.FCI(restricted=restricted, tol=1e-11)
-    solver = FCI
+    solver = dmet.impurity_solver.CCSD(restricted=restricted, tol=1e-11)
 
     E_old = 0.0
     conv = False
