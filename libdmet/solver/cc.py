@@ -193,6 +193,8 @@ class CCSD(object):
         self.twopdm = None
 
         self.optimized = False
+
+        print("~/libdmet_preview/libdmet/solver/cc.py +197")
     
     def run(self, Ham=None, nelec=None, guess=None, restart=False, \
             dump_tl=False, fcc_name="fcc.h5", calc_rdm2=False, \
@@ -266,6 +268,7 @@ class CCSD(object):
             if self.ghf:
                 raise NotImplementedError
             elif Ham.restricted:
+                print("~/libdmet_preview/libdmet/solver/cc.py +271")
                 self.cisolver = cc.CCSD(self.scfsolver.mf)
             else:
                 self.cisolver = UICCSD(self.scfsolver.mf)
