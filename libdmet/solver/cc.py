@@ -25,6 +25,7 @@ from libdmet.basis_transform.make_basis import \
 from libdmet.utils.misc import mdot, max_abs, take_eri
 
 from pyscf.scf import hf
+from pyscf import mcscf, fci
 from pyscf import cc
 from pyscf import lib
 from pyscf import ao2mo
@@ -193,8 +194,6 @@ class CCSD(object):
         self.twopdm = None
 
         self.optimized = False
-
-        print("~/libdmet_preview/libdmet/solver/cc.py +197")
     
     def run(self, Ham=None, nelec=None, guess=None, restart=False, \
             dump_tl=False, fcc_name="fcc.h5", calc_rdm2=False, \
@@ -641,6 +640,128 @@ class CCSD(object):
 
     def cleanup(self):
         pass
+
+class TCCSD(CCSD):
+    def run(self, Ham=None, nelec=None, guess=None, restart=False, \
+            dump_tl=False, fcc_name="fcc.h5", calc_rdm2=False, \
+            **kwargs):
+        log.info("TCCSD solver: start")
+        spin = Ham.H1["cd"].shape[0]
+        if spin > 1:
+            log.eassert(not self.restricted, "CC solver: spin (%s) > 1 " \
+                        "requires unrestricted", spin)
+        if nelec is None:
+            if self.bcs:
+                nelec = Ham.norb * 2
+            else:
+                raise ValueError("CC solver: nelec cannot be None " \
+                                 "for RCC or UCC.")
+        nelec_a, nelec_b = (nelec + self.Sz) // 2, (nelec - self.Sz) // 2
+        log.eassert(nelec_a >= 0 and nelec_b >=0, "CC solver: " \
+                    "nelec_a (%s), nelec_b (%s) should >= 0", nelec_a, nelec_b)
+        log.eassert(nelec_a + nelec_b == nelec, "CC solver: " \
+                    "nelec_a (%s) + nelec_b (%s) should == nelec (%s)", \
+                    nelec_a, nelec_b, nelec)
+        
+        log.debug(1, "CC solver: mean-field")
+        self.scfsolver.set_system(nelec, self.Sz, False, self.restricted, \
+                                  max_memory=self.max_memory)
+        self.scfsolver.set_integral(Ham)
+
+        dm0 = kwargs.get("dm0", None)
+        scf_max_cycle = kwargs.get("scf_max_cycle", 200)
+        bcc = kwargs.get("bcc", False)
+        bcc_verbose = kwargs.get("bcc_verbose", 2)
+        bcc_restart = kwargs.get("bcc_restart", False)
+        if bcc and bcc_restart and self.optimized and restart:
+            bcc_restart = True
+            scf_max_cycle = 1 # need not to do scf
+        else:
+            bcc_restart = False
+        
+        if self.ghf:
+            raise NotImplementedError
+        else:
+            E_HF, rhoHF = self.scfsolver.HF(tol=self.conv_tol*0.1, \
+                    MaxIter=scf_max_cycle, InitGuess=dm0)
+        log.debug(1, "CC solver: mean-field converged: %s", \
+                  self.scfsolver.mf.converged)
+        
+        if "mo_energy_custom" in kwargs:
+            self.scfsolver.mf.mo_energy = kwargs["mo_energy_custom"]
+        if "mo_occ_custom" in kwargs:
+            self.scfsolver.mf.mo_occ = kwargs["mo_occ_custom"]
+        if "mo_coeff_custom" in kwargs:
+            log.info("Use customized MO as CC reference.")
+            self.scfsolver.mf.mo_coeff = kwargs["mo_coeff_custom"]
+            self.scfsolver.mf.e_tot = self.scfsolver.mf.energy_tot()
+        
+        log.debug(2, "CC solver: mean-field rdm1: \n%s", 
+                  self.scfsolver.mf.make_rdm1())
+        
+        if kwargs.get("ccd", False):
+            raise NotImplementedError
+        else:
+            if self.ghf:
+                raise NotImplementedError
+            elif Ham.restricted:
+                self.cisolver = cc.CCSD(self.scfsolver.mf, TCCSD=True)
+            else:
+                self.cisolver = UICCSD(self.scfsolver.mf)
+
+        self.cisolver.max_cycle = self.max_cycle
+        self.cisolver.conv_tol = self.conv_tol
+        self.cisolver.conv_tol_normt = self.conv_tol_normt
+        self.cisolver.level_shift = self.level_shift
+        self.cisolver.set(frozen = self.frozen)
+        self.cisolver.verbose = self.verbose
+        
+        if restart:
+            log.eassert("basis" in kwargs, "restart requires basis passed in")
+        if restart and self.optimized:
+            t1, t2, l1, l2 = self.load_t12_from_h5(fcc_name, kwargs["basis"], \
+                    self.scfsolver.mf.mo_coeff, bcc_restart=bcc_restart)
+        else:
+            if guess is not None:
+                if len(guess) == 2:
+                    t1, t2 = guess
+                    l1, l2 = None, None
+                else:
+                    t1, t2, l1, l2 = guess
+            else:
+                t1, t2, l1, l2 = None, None, None, None
+
+        log.debug(1, "CC solver: solve t amplitudes")
+        eris = self.cisolver.ao2mo(self.cisolver.mo_coeff)
+
+        mc           = mcscf.CASCI(self.scfsolver.mf, 2, 2)
+        mc.max_cycle = self.max_cycle
+        mc.conv_tol  = self.conv_tol
+        mc.verbose   = self.verbose
+        mc.casci()
+
+        E_corr, t1, t2 = self.cisolver.kernel(mc, t1=t1, t2=t2, eris=eris)
+        
+        if bcc:
+            raise NotImplementedError
+        
+        log.debug(1, "CC solver: solve l amplitudes")
+        e_t = 0.0
+        
+        E = self.cisolver.e_tot + e_t
+
+        self.make_rdm1(Ham, drv=None)
+        if calc_rdm2:
+            self.make_rdm2(Ham, drv=None)
+
+        if dump_tl or restart:
+            self.save_t12_to_h5(fcc_name, kwargs["basis"], self.cisolver.mo_coeff)
+        
+        if not self.cisolver.converged:
+            log.warn("CC solver not converged...")
+        self.optimized = True
+        return self.onepdm, E
+
 
 # ****************************************************************************
 # Expectation value from CCSD rdm, outcore version.

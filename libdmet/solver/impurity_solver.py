@@ -19,7 +19,7 @@ from libdmet.solver import scf, casscf, bcs_dmrgscf
 from libdmet.solver.dmrgci import CASCI, DmrgCI, get_orbs
 from libdmet.solver.bcs_dmrgci import BCSDmrgCI, get_qps, get_BCS_mo
 from libdmet.solver.fci import FCI, FCI_AO
-from libdmet.solver.cc import CCSD
+from libdmet.solver.cc import CCSD, TCCSD
 from libdmet.solver.scf_solver import SCFSolver
 
 __all__ = ["AFQMC", "Block", "StackBlock", "Block2", "DmrgCI", "CASSCF", "BCSDmrgCI",
